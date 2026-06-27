@@ -146,7 +146,14 @@ def derive_path(seed, path):
 # ── Address Generation ───────────────────────────────────────────────────────
 
 def hash160(data):
-    return hashlib.new('ripemd160', hashlib.sha256(data).digest()).digest()
+    sha = hashlib.sha256(data).digest()
+    try:
+        return hashlib.new('ripemd160', sha).digest()
+    except (ValueError, TypeError):
+        from Crypto.Hash import RIPEMD160
+        h = RIPEMD160.new()
+        h.update(sha)
+        return h.digest()
 
 B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
