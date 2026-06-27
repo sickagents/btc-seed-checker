@@ -38,13 +38,17 @@ except (ValueError, TypeError):
 MNEMONIC_BITS = 128          # 12 words (use 256 for 24 words)
 DERIVE_START = 0
 DERIVE_END = 20
-WORKER_THREADS = 80          # Mnemonic generators
-API_CONCURRENCY = 50         # Concurrent API calls per mnemonic batch
-API_DELAY = 0.15             # Delay between API calls per thread (rate limit)
-API_TIMEOUT = 8              # Seconds per API request
-MAX_RETRIES = 2              # Retries per failed API call
+WORKER_THREADS = 10          # Mnemonic generators (keep low to avoid API bans)
+API_CONCURRENCY = 5          # Concurrent API calls per mnemonic batch
+API_DELAY = 0.5              # Delay between API calls per thread (rate limit)
+API_TIMEOUT = 15             # Seconds per API request
+MAX_RETRIES = 3              # Retries per failed API call
 SAVE_FILE = "sukses.txt"
 STATS_INTERVAL = 5           # Print stats every N seconds
+
+# Proxy (optional — set to empty string to disable)
+# Format: http://user:pass@host:port or socks5://user:pass@host:port
+PROXY_URL = os.environ.get("BTC_PROXY", "")
 
 # ── BIP39 ─────────────────────────────────────────────────────────────────────
 
@@ -215,12 +219,32 @@ def pubkey_to_p2wpkh(pubkey):
 # ── Balance Checking ─────────────────────────────────────────────────────────
 
 session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+})
+if PROXY_URL:
+    session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
 
-# API endpoints with rate limit awareness
+# API endpoints — blockchain.info has different response format
 API_ENDPOINTS = [
-    {"name": "blockstream", "url": "https://blockstream.info/api/address/{addr}"},
-    {"name": "mempool",     "url": "https://mempool.space/api/address/{addr}"},
+    {
+        "name": "blockchain.info",
+        "url": "https://blockchain.info/rawaddr/{addr}?limit=0",
+        "parse": lambda d: d.get("final_balance", 0) / 1e8,
+    },
+    {
+        "name": "blockstream",
+        "url": "https://blockstream.info/api/address/{addr}",
+        "parse": lambda d: (d.get("chain_stats", {}).get("funded_txo_sum", 0) -
+                           d.get("chain_stats", {}).get("spent_txo_sum", 0)) / 1e8,
+    },
+    {
+        "name": "mempool",
+        "url": "https://mempool.space/api/address/{addr}",
+        "parse": lambda d: (d.get("chain_stats", {}).get("funded_txo_sum", 0) -
+                           d.get("chain_stats", {}).get("spent_txo_sum", 0)) / 1e8,
+    },
 ]
 
 def check_balance_single(address, timeout=API_TIMEOUT, retries=MAX_RETRIES):
@@ -232,17 +256,21 @@ def check_balance_single(address, timeout=API_TIMEOUT, retries=MAX_RETRIES):
                 resp = session.get(url, timeout=timeout)
                 if resp.status_code == 200:
                     d = resp.json()
-                    funded = d.get("chain_stats", {}).get("funded_txo_sum", 0)
-                    spent = d.get("chain_stats", {}).get("spent_txo_sum", 0)
-                    balance = (funded - spent) / 1e8
+                    balance = api["parse"](d)
                     return balance, api["name"]
                 elif resp.status_code == 429:
-                    time.sleep(2 * (attempt + 1))
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                elif resp.status_code == 500:
+                    time.sleep(2)
                     continue
                 else:
                     break
             except requests.exceptions.Timeout:
-                time.sleep(0.5)
+                time.sleep(1 * (attempt + 1))
+                continue
+            except requests.exceptions.ConnectionError:
+                time.sleep(2 * (attempt + 1))
                 continue
             except Exception:
                 break
