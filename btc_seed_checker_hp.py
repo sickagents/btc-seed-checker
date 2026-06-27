@@ -18,6 +18,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from collections import deque
 
+# ── Fix RIPEMD160 for OpenSSL 3.0+ ───────────────────────────────────────────
+try:
+    hashlib.new('ripemd160')
+except (ValueError, TypeError):
+    # OpenSSL 3.0+ disables legacy algorithms. Enable via ctypes.
+    try:
+        import ctypes
+        lib = ctypes.CDLL('libcrypto.so.3')
+        lib.OSSL_PROVIDER_load(None, b'legacy')
+        lib.OSSL_PROVIDER_load(None, b'default')
+    except Exception:
+        # Fallback: set env var and re-exec
+        os.environ['OPENSSL_CONF'] = ''  # disable config to use built-in
+        pass
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 MNEMONIC_BITS = 128          # 12 words (use 256 for 24 words)
