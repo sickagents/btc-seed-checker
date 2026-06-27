@@ -382,6 +382,7 @@ def worker(worker_id, stop_event):
             mnemonic = entropy_to_mnemonic(entropy)
             process_mnemonic(mnemonic)
         except Exception as e:
+            print(f"[Worker {worker_id}] ERROR: {e}")
             time.sleep(0.5)
 
 # ── Stats Printer ────────────────────────────────────────────────────────────
